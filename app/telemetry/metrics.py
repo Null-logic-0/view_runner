@@ -62,6 +62,10 @@ class SessionResult:
     http_status: int | None = None
     error_type: str | None = None
     error_message: str | None = None
+    #: Attempts made, including the first. > 1 means the session was retried.
+    #: Set by the runner, which owns the retry loop; the session itself runs
+    #: exactly once and does not know it may be called again.
+    attempts: int = 1
 
     @property
     def ok(self) -> bool:
@@ -70,6 +74,10 @@ class SessionResult:
     @property
     def used_proxy(self) -> bool:
         return self.proxy_label is not None
+
+    @property
+    def was_retried(self) -> bool:
+        return self.attempts > 1
 
 
 def _mean(values: Iterable[float | None]) -> float | None:
@@ -103,6 +111,10 @@ class ExperimentMetrics:
     started_at: float
     total_ms: float
     results: tuple[SessionResult, ...]
+    #: True if the failure policy stopped the run early. The results below are
+    #: still valid -- they are just fewer than were requested.
+    aborted: bool = False
+    abort_reason: str | None = None
 
     # -- counts ------------------------------------------------------------ #
 
@@ -141,6 +153,16 @@ class ExperimentMetrics:
     def sessions_via_proxy(self) -> int:
         return sum(1 for r in self.results if r.used_proxy)
 
+    @property
+    def sessions_retried(self) -> int:
+        return sum(1 for r in self.results if r.was_retried)
+
+    @property
+    def total_attempts(self) -> int:
+        """Sessions plus retries. Divergence from sessions_started is the
+        hidden cost of a retry policy."""
+        return sum(r.attempts for r in self.results)
+
     # -- timings (completed sessions only) --------------------------------- #
 
     @property
@@ -176,6 +198,9 @@ class ExperimentMetrics:
             if not status.ok:
                 lines.append(f"{'  ' + status.value:<24}{count:>18,}")
 
+        if self.sessions_retried:
+            lines.append(f"{'  (retried):':<24}{self.sessions_retried:>18,}")
+
         lines += [
             "",
             f"{'Average setup:':<24}{ms(self.average_setup_ms):>18}",
@@ -187,4 +212,6 @@ class ExperimentMetrics:
             f"{'Sessions via proxy:':<24}{self.sessions_via_proxy:>18,}",
             f"{'Wall clock:':<24}{self.total_ms / 1000:>15,.1f} s",
         ]
+        if self.aborted:
+            lines += ["", f"ABORTED: {self.abort_reason}"]
         return "\n".join(lines)

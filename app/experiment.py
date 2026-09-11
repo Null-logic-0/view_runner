@@ -76,6 +76,7 @@ async def run_experiment_from_config(
             count=config.session.count,
             concurrency=config.runner.concurrency,
             pool=pool,
+            policy=config.failure,
             experiment_id=experiment_id,
             on_result=on_result,
         )

@@ -101,7 +101,7 @@ class ResultWriter:
         if self._handle is None:
             raise RuntimeError("ResultWriter is not open; use it as a context manager")
         self._handle.write(json.dumps(result_to_dict(result), default=str) + "\n")
-       
+
         self._handle.flush()
         self._written += 1
 

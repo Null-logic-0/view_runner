@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 
 import pytest
 
+from app.failure import FailurePolicy
 from app.proxy.parser import Proxy
 from app.proxy.pool import ProxyPool
 from app.runner import new_experiment_id, run_experiment
@@ -382,3 +383,165 @@ async def test_concurrency_actually_overlaps_the_waiting() -> None:
     elapsed = time.monotonic() - began
 
     assert elapsed < 0.6, f"expected roughly 2 batches of 50 ms, took {elapsed:.2f}s"
+
+
+# ---------------------------------------------------- retries and aborting --
+
+
+@dataclass
+class ScriptedSession:
+    """Returns a scripted status per attempt, per session.
+
+    `script[session_id]` is the sequence of statuses that session's successive
+    attempts return. Anything past the end repeats the last entry.
+    """
+
+    script: dict[int, list[SessionStatus]] = field(default_factory=dict)
+    attempts: list[tuple[int, str | None]] = field(default_factory=list)
+
+    async def __call__(
+        self, *, experiment_id: str, session_id: int, proxy: Proxy | None
+    ) -> SessionResult:
+        # A real session always suspends on network I/O, and cancellation is
+        # only ever delivered at a suspension point. Without this yield the
+        # fake runs to completion inside one scheduling slice, so a TaskGroup
+        # abort cannot stop its siblings and the test would assert something
+        # that is false of every real session.
+        await asyncio.sleep(0)
+        seen = sum(1 for sid, _ in self.attempts if sid == session_id)
+        statuses = self.script.get(session_id, [SessionStatus.COMPLETED])
+        status = statuses[min(seen, len(statuses) - 1)]
+        self.attempts.append((session_id, proxy.label if proxy else None))
+        return SessionResult(
+            experiment_id=experiment_id,
+            session_id=session_id,
+            status=status,
+            proxy_label=proxy.label if proxy else None,
+            started_at=0.0,
+            total_ms=1.0,
+            http_status=200 if status.ok else None,
+        )
+
+
+NO_WAIT = FailurePolicy(max_attempts=3, backoff_seconds=0.0)
+
+
+async def test_no_retries_happen_by_default() -> None:
+    """The default policy must not quietly improve anyone's success rate."""
+    fake = ScriptedSession(script={1: [SessionStatus.FAILED_PROXY]})
+    metrics = await run_experiment(run_session=fake, count=1)
+
+    assert len(fake.attempts) == 1
+    assert metrics.results[0].attempts == 1
+    assert metrics.sessions_retried == 0
+
+
+async def test_a_retryable_failure_is_retried_until_it_succeeds() -> None:
+    fake = ScriptedSession(
+        script={
+            1: [SessionStatus.FAILED_PROXY, SessionStatus.FAILED_TIMEOUT, SessionStatus.COMPLETED]
+        }
+    )
+    metrics = await run_experiment(run_session=fake, count=1, policy=NO_WAIT)
+
+    assert len(fake.attempts) == 3
+    assert metrics.sessions_completed == 1
+    assert metrics.results[0].attempts == 3
+    assert metrics.results[0].was_retried is True
+
+
+async def test_retries_stop_at_the_budget_and_the_last_failure_is_recorded() -> None:
+    fake = ScriptedSession(script={1: [SessionStatus.FAILED_PROXY]})
+    metrics = await run_experiment(run_session=fake, count=1, policy=NO_WAIT)
+
+    assert len(fake.attempts) == 3
+    assert metrics.sessions_completed == 0
+    assert metrics.results[0].status is SessionStatus.FAILED_PROXY
+    assert metrics.results[0].attempts == 3
+
+
+async def test_a_non_retryable_failure_is_not_retried() -> None:
+    fake = ScriptedSession(script={1: [SessionStatus.FAILED_SETUP]})
+    metrics = await run_experiment(run_session=fake, count=1, policy=NO_WAIT)
+
+    assert len(fake.attempts) == 1
+    assert metrics.results[0].attempts == 1
+
+
+async def test_a_retry_gets_the_next_proxy_not_the_failed_one() -> None:
+    """Retrying a proxy failure on the same proxy would be pointless."""
+    fake = ScriptedSession(script={1: [SessionStatus.FAILED_PROXY, SessionStatus.COMPLETED]})
+    await run_experiment(run_session=fake, count=1, policy=NO_WAIT, pool=make_pool(3))
+
+    used = [label for _, label in fake.attempts]
+    assert used == ["10.0.0.1:8080", "10.0.0.2:8080"]
+
+
+async def test_total_attempts_exposes_the_hidden_cost_of_retrying() -> None:
+    fake = ScriptedSession(script={sid: [SessionStatus.FAILED_TIMEOUT] for sid in (1, 2, 3)})
+    metrics = await run_experiment(run_session=fake, count=3, policy=NO_WAIT)
+
+    assert metrics.sessions_started == 3
+    assert metrics.total_attempts == 9
+
+
+async def test_backoff_is_awaited_between_attempts() -> None:
+    fake = ScriptedSession(script={1: [SessionStatus.FAILED_PROXY, SessionStatus.COMPLETED]})
+    policy = FailurePolicy(max_attempts=2, backoff_seconds=0.1)
+
+    began = time.monotonic()
+    await run_experiment(run_session=fake, count=1, policy=policy)
+    assert time.monotonic() - began >= 0.1
+
+
+# -- aborting ---------------------------------------------------------------- #
+
+
+async def test_an_experiment_aborts_after_a_run_of_failures() -> None:
+    fake = ScriptedSession(script={sid: [SessionStatus.FAILED_PROXY] for sid in range(1, 21)})
+    policy = FailurePolicy(abort_after_consecutive_failures=3)
+
+    metrics = await run_experiment(run_session=fake, count=20, concurrency=1, policy=policy)
+
+    assert metrics.aborted is True
+    assert metrics.abort_reason is not None
+    assert "3 consecutive failures" in metrics.abort_reason
+    assert metrics.sessions_started < 20, "the remaining sessions must not have run"
+
+
+async def test_an_aborted_experiment_still_returns_the_data_it_collected() -> None:
+    """The useful answer is "I stopped at session N, here is what I saw"."""
+    fake = ScriptedSession(script={sid: [SessionStatus.FAILED_TIMEOUT] for sid in range(1, 21)})
+    policy = FailurePolicy(abort_after_consecutive_failures=2)
+
+    metrics = await run_experiment(run_session=fake, count=20, concurrency=1, policy=policy)
+
+    assert metrics.aborted is True
+    assert metrics.sessions_started >= 2
+    assert all(r.status is SessionStatus.FAILED_TIMEOUT for r in metrics.results)
+    assert "ABORTED" in metrics.summary()
+
+
+async def test_scattered_failures_do_not_abort() -> None:
+    """Only a run of failures means something is broken."""
+    script = {2: [SessionStatus.FAILED_PROXY], 5: [SessionStatus.FAILED_TIMEOUT]}
+    fake = ScriptedSession(script=script)
+    policy = FailurePolicy(abort_after_consecutive_failures=2)
+
+    metrics = await run_experiment(run_session=fake, count=8, concurrency=1, policy=policy)
+
+    assert metrics.aborted is False
+    assert metrics.sessions_started == 8
+    assert metrics.sessions_failed == 2
+
+
+async def test_a_genuine_bug_still_propagates_rather_than_being_reported_as_an_abort() -> None:
+    """`except*` matches only ExperimentAbortedError; anything else escapes."""
+
+    async def buggy(*, experiment_id: str, session_id: int, proxy: Proxy | None) -> SessionResult:
+        raise TypeError("this is a bug, not a failed session")
+
+    with pytest.raises(ExceptionGroup) as exc_info:
+        await run_experiment(run_session=buggy, count=3)
+
+    assert any(isinstance(exc, TypeError) for exc in exc_info.value.exceptions)

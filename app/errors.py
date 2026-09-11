@@ -74,3 +74,12 @@ class BrowserLaunchError(BrowserError):
     Fatal for the experiment, not just one session: if Chromium will not start,
     retrying 49 more times will not help.
     """
+
+
+class ExperimentAbortedError(LabError):
+    """The failure policy stopped the experiment early.
+
+    Not a crash: the results collected before the abort are still valid and are
+    still returned. Raised inside a task so the TaskGroup cancels its siblings,
+    then caught by the runner, which reports it on the metrics.
+    """

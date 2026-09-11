@@ -20,9 +20,12 @@ from typing import Any, Final
 from urllib.parse import urlsplit
 
 from app.errors import ConfigurationError
+from app.failure import FailurePolicy
 from app.telemetry.logger import LOG_FORMATS, LOG_LEVELS
 
 MAX_CONCURRENCY: Final = 64
+# A retry budget is a multiplier on runtime, so a typo here is expensive.
+MAX_ATTEMPTS: Final = 10
 
 _ENGINES: Final = ("chromium", "firefox", "webkit")
 _PROXY_SCHEMES: Final = ("http", "https", "socks5")
@@ -110,6 +113,8 @@ class Config:
     proxy: ProxyConfig = field(default_factory=ProxyConfig)
     runner: RunnerConfig = field(default_factory=RunnerConfig)
     telemetry: TelemetryConfig = field(default_factory=TelemetryConfig)
+    # The policy type itself, not a mirror of it: one definition, no drift.
+    failure: FailurePolicy = field(default_factory=FailurePolicy)
 
 
 # Validation helper
@@ -283,6 +288,7 @@ _SECTIONS: Final = (
     "proxy",
     "runner",
     "telemetry",
+    "failure",
 )
 
 
@@ -329,6 +335,12 @@ def build_config(data: Mapping[str, Any], *, source: str | None = None) -> Confi
     concurrency = runner.integer("concurrency", 1, minimum=1, maximum=MAX_CONCURRENCY)
     runner.finish()
 
+    failure = _Section("failure", data.get("failure", _MISSING), problems)
+    max_attempts = failure.integer("max_attempts", 1, minimum=1, maximum=MAX_ATTEMPTS)
+    backoff = failure.number("retry_backoff_seconds", 0.5, minimum=0.0)
+    abort_after = failure.integer("abort_after_consecutive_failures", 0, minimum=0)
+    failure.finish()
+
     telemetry = _Section("telemetry", data.get("telemetry", _MISSING), problems)
     level = telemetry.string("level", "INFO", choices=LOG_LEVELS)
     log_format = telemetry.string("format", "text", choices=LOG_FORMATS)
@@ -359,6 +371,11 @@ def build_config(data: Mapping[str, Any], *, source: str | None = None) -> Confi
         proxy=ProxyConfig(enabled=proxy_enabled, file=proxy_file, default_scheme=proxy_scheme),
         runner=RunnerConfig(concurrency=concurrency),
         telemetry=TelemetryConfig(level=level, format=log_format, results_dir=results_dir),
+        failure=FailurePolicy(
+            max_attempts=max_attempts,
+            backoff_seconds=backoff,
+            abort_after_consecutive_failures=abort_after,
+        ),
     )
 
 

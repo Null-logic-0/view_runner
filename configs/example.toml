@@ -45,3 +45,10 @@ concurrency = 1         # start sequential; raise this once it is reliable
 level = "INFO"          # DEBUG | INFO | WARNING | ERROR | CRITICAL
 format = "text"         # text for humans, json for jq and later analysis
 results_dir = "results" # empty string disables writing results to disk
+
+[failure]
+# Retries change what the experiment measures: "success rate" becomes
+# "success rate given up to N attempts". Off by default for that reason.
+max_attempts = 1                      # total attempts per session; 1 = no retries
+retry_backoff_seconds = 0.5           # doubles per attempt; no jitter (see failure.py)
+abort_after_consecutive_failures = 0  # 0 = never abort early
