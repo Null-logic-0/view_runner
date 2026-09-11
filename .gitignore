@@ -30,6 +30,3 @@ htmlcov/
 
 # ---- macOS ---------------------------------------------------------------
 .DS_Store
-
-# NOTE: uv.lock is deliberately NOT ignored. It is the artifact that makes the
-# environment reproducible on another machine; it must be committed.

@@ -1,0 +1,38 @@
+# Example configuration.
+
+# Copy this file and edit the copy:
+#     cp configs/example.toml configs/local.toml
+#
+# configs/local*.toml is gitignored, so local.toml is the right place for a
+# target URL or proxy file you would rather not commit.
+
+[target]
+# Required. Must be a site you own or are authorised to test.
+# Defaults to the local bench server we build in a later phase.
+url = "http://127.0.0.1:8000/"
+
+[session]
+count = 10              # how many sessions this experiment runs
+duration_seconds = 30   # how long each session stays open (0 = close immediately)
+
+[browser]
+engine = "chromium"     # chromium | firefox | webkit
+headless = true
+viewport_width = 1280
+viewport_height = 800
+locale = "en-US"
+# Identify the lab honestly in your own server logs. Empty = browser default.
+user_agent = "browser-automation-lab/0.1.0"
+
+[timeouts]
+launch_ms = 30000       # give up if the browser will not start
+navigation_ms = 30000   # give up if the page will not load
+
+[proxy]
+enabled = false
+file = "proxies.txt"
+# proxies.txt holds bare host:port with no scheme, so the protocol is set here.
+default_scheme = "http" # http | https | socks5
+
+[runner]
+concurrency = 1         # start sequential; raise this once it is reliable

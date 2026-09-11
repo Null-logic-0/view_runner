@@ -62,7 +62,15 @@ select = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101"]  # `assert` is the entire point of a test
+"tests/**" = [
+    "S101",  # `assert` is the entire point of a test
+    # S105/S106 flag hardcoded passwords. Tests need fake credentials in order
+    # to prove that real ones get redacted, so the rule cannot apply here.
+    # Note what this does NOT protect: the real guard against committing a
+    # secret is .gitignore plus never writing one into a file, not a linter.
+    "S105",
+    "S106",
+]
 
 [tool.ruff.lint.isort]
 known-first-party = ["app"]

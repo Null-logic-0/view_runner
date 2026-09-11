@@ -42,3 +42,35 @@ class ConfigurationError(LabError):
         lines = [f"{count} configuration {noun}{where}:"]
         lines.extend(f"  - {problem}" for problem in self.problems)
         return "\n".join(lines)
+
+
+class ProxyError(LabError):
+    """Base class for proxy problems."""
+
+
+class ProxyParseError(ProxyError):
+    """A single proxy entry could not be parsed.
+
+    Raised by `parse_line` for one entry. `parse_text` catches it and records
+    the failure instead of propagating, because one bad line out of thousands
+    should not abort a run.
+    """
+
+
+class ProxyPoolEmptyError(ProxyError):
+    """Proxies are enabled but there are none usable.
+
+    Fatal: unlike a single bad line, this invalidates the whole experiment.
+    """
+
+
+class BrowserError(LabError):
+    """Base class for browser problems."""
+
+
+class BrowserLaunchError(BrowserError):
+    """The browser process could not be started.
+
+    Fatal for the experiment, not just one session: if Chromium will not start,
+    retrying 49 more times will not help.
+    """
