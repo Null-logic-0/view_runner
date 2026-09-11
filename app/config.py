@@ -379,8 +379,35 @@ def build_config(data: Mapping[str, Any], *, source: str | None = None) -> Confi
     )
 
 
-def load_config(path: Path) -> Config:
-    """Read a TOML file from disk and validate it."""
+def merge_overrides(
+    data: Mapping[str, Any], overrides: Mapping[str, Mapping[str, Any]]
+) -> dict[str, Any]:
+    """Layer overrides on top of parsed TOML data.
+
+    Two levels deep, because the config is exactly two levels deep. A general
+    recursive deep-merge would be more code, more edge cases, and no more
+    capability -- and `None` values are skipped so an unset CLI flag does not
+    erase a file setting.
+    """
+    merged: dict[str, Any] = {section: dict(values) for section, values in data.items()}
+    for section, values in overrides.items():
+        target = merged.setdefault(section, {})
+        if not isinstance(target, dict):  # the file has e.g. `runner = 5`
+            continue  # leave it; build_config will report it properly
+        for key, value in values.items():
+            if value is not None:
+                target[key] = value
+    return merged
+
+
+def load_config(path: Path, *, overrides: Mapping[str, Mapping[str, Any]] | None = None) -> Config:
+    """Read a TOML file from disk and validate it.
+
+    Precedence, lowest to highest: dataclass defaults, the file, `overrides`
+    (in practice, CLI flags). Overrides are merged into the parsed mapping and
+    then validated by the same `build_config` as everything else -- two
+    validation paths would mean one of them is untested.
+    """
     try:
         with path.open("rb") as handle:  # TOML is UTF-8 by spec tomllib decodes
             data = tomllib.load(handle)
@@ -393,4 +420,6 @@ def load_config(path: Path) -> Config:
     except UnicodeDecodeError as exc:
         raise ConfigurationError([f"not valid UTF-8: {exc}"], source=str(path)) from exc
 
+    if overrides:
+        data = merge_overrides(data, overrides)
     return build_config(data, source=str(path))
