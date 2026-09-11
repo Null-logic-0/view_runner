@@ -44,7 +44,7 @@ def test_counts() -> None:
     assert m.sessions_completed == 2
     assert m.sessions_failed == 2
     assert m.success_rate == 0.5
-    assert m.proxy_failures == 1
+    assert m.proxy_connection_failures == 1
 
 
 def test_status_counts_group_the_failure_modes() -> None:
@@ -95,7 +95,72 @@ def test_proxy_usage_is_counted_separately_from_proxy_failures() -> None:
         result(3),
     )
     assert m.sessions_via_proxy == 2
-    assert m.proxy_failures == 1
+    assert m.proxy_connection_failures == 1
+    assert m.failures_via_proxy == 1
+    assert m.proxy_attribution_is_certain is True
+
+
+# -- proxy attribution: the bracket ----------------------------------------- #
+
+
+def status_failure(session_id: int, http_status: int, proxy_label: str | None) -> SessionResult:
+    return SessionResult(
+        experiment_id="e",
+        session_id=session_id,
+        status=SessionStatus.FAILED_STATUS,
+        proxy_label=proxy_label,
+        started_at=0.0,
+        total_ms=100.0,
+        http_status=http_status,
+    )
+
+
+def test_a_proxy_that_returns_502_is_not_counted_as_unreachable() -> None:
+    """The under-count found by experiment D1.
+
+    An overloaded proxy responds 502 rather than refusing the connection, so
+    the session is FAILED_STATUS and a metric counting only FAILED_PROXY
+    reports zero while the proxy caused every failure.
+    """
+    m = metrics(
+        status_failure(1, 502, "1.1.1.1:80"),
+        status_failure(2, 502, "1.1.1.1:80"),
+        result(3, proxy_label="1.1.1.1:80"),
+    )
+    assert m.proxy_connection_failures == 0  # nothing was unreachable
+    assert m.failures_via_proxy == 2  # but two failures happened through it
+    assert m.proxy_attribution_is_certain is False
+
+
+def test_failures_without_a_proxy_are_outside_the_bracket() -> None:
+    """A target's own 502 on a direct session is not a proxy question."""
+    m = metrics(status_failure(1, 502, None), result(2))
+    assert m.failures_via_proxy == 0
+
+
+def test_the_bracket_is_certain_when_every_failure_is_a_connection_failure() -> None:
+    m = metrics(
+        result(1, SessionStatus.FAILED_PROXY, proxy_label="1.1.1.1:80"),
+        result(2, SessionStatus.FAILED_PROXY, proxy_label="2.2.2.2:80"),
+    )
+    assert m.proxy_connection_failures == m.failures_via_proxy == 2
+    assert m.proxy_attribution_is_certain is True
+
+
+def test_the_summary_shows_the_bracket_and_says_what_is_unattributable() -> None:
+    text = metrics(
+        status_failure(1, 502, "1.1.1.1:80"),
+        result(2, SessionStatus.FAILED_PROXY, proxy_label="1.1.1.1:80"),
+        result(3, proxy_label="1.1.1.1:80"),
+    ).summary()
+
+    assert "Proxy attribution" in text
+    assert "unreachable (certain):" in text
+    assert "1 failure(s) cannot be attributed" in text
+
+
+def test_the_summary_omits_attribution_when_no_proxy_was_used() -> None:
+    assert "Proxy attribution" not in metrics(result(1), result(2)).summary()
 
 
 def test_summary_reports_the_headline_numbers() -> None:

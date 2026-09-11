@@ -1,0 +1,34 @@
+# Experiment B' - concurrency
+#
+# Identical to A except concurrency 5. A vs B' isolates concurrency.
+
+[target]
+url = "http://127.0.0.1:8500/exp-b2"
+expected_status = 200
+
+[session]
+count = 10
+duration_seconds = 30
+wait_until = "load"
+
+[browser]
+headless = true
+user_agent = "browser-automation-lab/0.1.0"
+
+[runner]
+concurrency = 5
+
+[proxy]
+enabled = false
+file = "proxies.local.txt"
+default_scheme = "http"
+
+[telemetry]
+level = "WARNING"
+format = "text"
+results_dir = "results"
+
+[failure]
+max_attempts = 1
+retry_backoff_seconds = 0.25
+abort_after_consecutive_failures = 0

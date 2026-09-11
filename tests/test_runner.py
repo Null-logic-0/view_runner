@@ -204,7 +204,7 @@ async def test_failures_are_recorded_and_do_not_stop_the_experiment() -> None:
     assert metrics.sessions_started == 5
     assert metrics.sessions_completed == 3
     assert metrics.sessions_failed == 2
-    assert metrics.proxy_failures == 1
+    assert metrics.proxy_connection_failures == 1
     assert metrics.success_rate == pytest.approx(0.6)
 
 

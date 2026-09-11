@@ -13,9 +13,67 @@ automation-lab run --url http://127.0.0.1:8000/ -n 10 -d 30 -j 5
 
 ---
 
+## What this is, in plain English
+
+A browser is a big, expensive program. This project opens one, points it at a web page, holds
+it there for a while, closes it, and writes down exactly how long each part took and whether
+anything went wrong. Then it does that again — ten times, or fifty, sometimes several at once —
+and gives you a report.
+
+That's it. It's a stopwatch and a notebook wrapped around a web browser.
+
+The interesting questions turn out to be things like: how much does opening a browser tab
+actually cost? Does running ten at once make them each slower, and by how much? If you send the
+traffic through a proxy, what does that add? When something fails, *what* failed — the proxy,
+the network, or the page itself? Those have real answers, and most people guess instead of
+measuring.
+
+It comes with its own practice website and its own proxy server, so you can break things on
+purpose and watch what happens.
+
+---
+
+## Why I built this
+
+This started as a rewrite of an old "YouTube view bot" I found — 95 lines that opened Chrome
+through a random proxy, waited, and closed it. I didn't want a working view bot. I wanted to
+understand every layer that little script was skating over, and the honest way to do that was
+to rebuild it properly against a target I own.
+
+The things I set out to learn, and where each one lives in this repo:
+
+| What I wanted to understand | Where it shows up |
+| --- | --- |
+| Modern Python project structure | `pyproject.toml`, `uv.lock`, one dependency |
+| How browser automation actually works | `app/browser/` — driver, protocol, context, page |
+| HTTP and proxies, underneath the libraries | `lab/proxy_server.py`, written from scratch |
+| asyncio: coroutines, tasks, cancellation | `app/runner.py` — semaphore, TaskGroup, `except*` |
+| Not leaking resources when things fail | `try/finally` everywhere, with tests that prove it |
+| Testing things that are slow and stateful | 306 tests; 269 of them need no browser at all |
+| Observability that isn't `print()` | `app/telemetry/` — structured logs, JSONL results |
+| Designing so pieces can change independently | `runner.py` cannot import Playwright, by test |
+| Measuring performance without fooling myself | [Concurrency](#concurrency) and the experiments |
+
+The last one turned out to be the hardest and the most useful. It is very easy to produce a
+table of numbers that looks authoritative and means nothing. Most of this project's design —
+recording every session whether it succeeded or not, keeping the config next to the results,
+refusing to average a "time to succeed" together with a "time to fail" — exists because of
+that, not because of anything to do with browsers.
+
+**What I'd tell someone starting the same thing:** almost every real problem here was found by
+running the code, not by reading it. A port Chromium silently refuses to connect to. A shutdown
+that took half a second for no reason. A deadlock from calling a blocking function inside an
+event loop. A test double that could never be cancelled because it never waited for anything.
+None of those were visible in review. All of them were obvious within seconds of something
+actually running.
+
+---
+
 ## Table of contents
 
+- [Why I built this](#why-i-built-this)
 - [Purpose and scope](#purpose-and-scope)
+- [How to use it](#how-to-use-it)
 - [How it works](#how-it-works)
 - [Architecture](#architecture)
 - [Requirements](#requirements)
@@ -53,6 +111,185 @@ analytics. That is why `configs/example.toml` ships with
 `user_agent = "browser-automation-lab/0.1.0"`.
 
 **Point this only at targets you own or are authorised to test.**
+
+---
+
+## How to use it
+
+A walkthrough from nothing to your first measurement. No prior knowledge of the codebase needed.
+
+### 1. Set it up
+
+```bash
+uv sync                             # installs Python dependencies
+uv run playwright install chromium  # downloads the browser itself (~95 MB, separate step)
+uv run automation-lab doctor        # checks it all actually works
+```
+
+`doctor` prints a checklist. If something is wrong it tells you which thing and, usually, how to
+fix it. Do not skip it — the second command above is the one everybody forgets.
+
+### 2. Start the practice lab
+
+You need something to point the browser at. The project ships with one:
+
+```bash
+python -m lab.bench --proxies 3 --write-proxy-file proxies.local.txt
+```
+
+That starts a small website on `http://127.0.0.1:8000` and three proxy servers. Leave it running
+and open a second terminal. The website has pages that misbehave on demand — one that's slow,
+one that returns errors, one that fails the first few times you ask — so you can test how your
+setup handles trouble without waiting for real trouble.
+
+### 3. Run something
+
+```bash
+automation-lab run --url http://127.0.0.1:8000/ -n 5 -d 3
+```
+
+That means: open the page **5** times, hold each one open for **3** seconds. It will take about
+15 seconds and then print a report.
+
+### 4. Read the report
+
+```
+Sessions:                 5      how many we tried to run
+Completed:                5      how many finished properly
+Failed:                   0      how many didn't
+
+Average setup:        102.1 ms   opening a fresh, isolated browser tab
+Average navigation:     9.3 ms   from "go" until the page had finished loading
+Average dwell:     3,000.2 ms    how long we held it open (you asked for 3,000)
+Average duration:  3,142.1 ms    the whole session, start to finish
+
+Success rate:         100.0%
+Sessions via proxy:        0     none, because we didn't ask for any
+Wall clock:             15.7 s   real time you waited
+```
+
+Two things worth knowing about these numbers:
+
+- **Averages only cover sessions that worked.** A session that died halfway has no "navigation
+  time", and counting it as zero would make a broken run look fast.
+- **`Wall clock` is real elapsed time.** Five 3-second sessions one after another take about 15
+  seconds. Run them at the same time and that drops — which is the next step.
+
+### 5. Run several at once
+
+```bash
+automation-lab run --url http://127.0.0.1:8000/ -n 5 -d 3 -j 5
+```
+
+`-j 5` means *five at a time*. Same work, now about 3 seconds of wall clock instead of 15.
+
+Watch the `Average navigation` figure as you raise `-j`. It goes **up**. That isn't the website
+getting slower — it's your own machine doing five things at once. This matters: if you compare
+speed between two runs at different `-j` values, you are measuring your laptop, not the site.
+
+### 6. Send it through the proxies
+
+```bash
+automation-lab run --url http://127.0.0.1:8000/ -n 6 -d 2 -j 3 --proxy-file proxies.local.txt
+```
+
+Each session now goes through one of the three proxies, in rotation. `Sessions via proxy` should
+read 6.
+
+### 7. Break something on purpose
+
+Stop the bench (Ctrl-C) and restart it with proxies that fail every second request:
+
+```bash
+python -m lab.bench --proxies 3 --fail-every 2 --write-proxy-file proxies.local.txt
+```
+
+Run the same command as step 6. Six sessions spread across three proxies is two requests each,
+so each proxy fails its second one — three failures:
+
+```
+Sessions:                 6
+Completed:                3
+Failed:                   3
+  failed_status           3
+
+Proxy attribution
+  unreachable (certain):  0
+  any failure via proxy:  3
+  3 failure(s) cannot be attributed to proxy or target
+```
+
+*(The counter is per proxy and cumulative for as long as the bench runs, so restart it if you
+want the same result twice. `--fail-every 3` with only six sessions produces no failures at all
+— two requests per proxy never reaches the third.)*
+
+Now turn retries on and run it again:
+
+```bash
+automation-lab run --url http://127.0.0.1:8000/ -n 6 -d 2 -j 3 \
+    --proxy-file proxies.local.txt -c configs/experiments/d2.toml
+```
+
+Every session now succeeds — 50% becomes 100%, with nothing fixed. That's worth sitting with: **"success rate" is
+not a property of the system on its own, it's a property of the system plus how hard you retry.**
+Quoting one without the other is misleading, which is why retries are off by default here.
+
+### 8. Look at what was saved
+
+Every run writes two files into `results/`:
+
+```bash
+ls results/
+cat results/*.jsonl | head -1     # one line per session
+cat results/*.summary.json        # totals, plus the exact settings used
+```
+
+The `.jsonl` file has one line per session, so you can ask questions later without re-running
+anything:
+
+```bash
+# which sessions failed, and why?
+cat results/*.jsonl | jq -r 'select(.status != "completed") | "\(.session_id) \(.error_message)"'
+
+# how many sessions did each proxy handle?
+cat results/*.jsonl | jq -r .proxy_label | sort | uniq -c
+```
+
+The `.summary.json` stores the configuration and the machine alongside the numbers, so in three
+weeks you can still answer "what settings produced this?" without trusting your memory.
+
+### 9. Use a config file instead of flags
+
+Once you're running the same thing repeatedly, put it in a file:
+
+```bash
+cp configs/example.toml configs/local.toml    # then edit it
+automation-lab run -c configs/local.toml
+automation-lab config -c configs/local.toml   # shows exactly what will be used
+```
+
+Flags still work and override the file, so `-n 2` is handy for a quick check without editing
+anything. `configs/local*.toml` is gitignored, so it's the right place for anything you'd rather
+not commit.
+
+`configs/experiments/` holds ready-made experiments — see [Concurrency](#concurrency) for what
+they found.
+
+### 10. Point it at your own site
+
+```bash
+automation-lab run --url https://your-own-site.example/ -n 5 -d 10
+```
+
+Only sites you own or are authorised to test. Set `user_agent` in your config to something
+identifiable so your own access logs are readable and you can filter lab traffic out of your
+analytics.
+
+### If something goes wrong
+
+Run `automation-lab doctor` first — it checks Python, Playwright, the browser, your config, your
+proxy file, the results directory, and whether the target responds. [Troubleshooting](#troubleshooting)
+covers the specific errors you're most likely to hit.
 
 ---
 
@@ -527,6 +764,27 @@ than becoming CSV's `""`.
 | `failed_timeout` | navigation exceeded `timeouts.navigation_ms` | yes |
 | `failed_status` | loaded, but not `expected_status` | 5xx only |
 
+### Proxy failures are reported as a bracket, not a number
+
+```
+Proxy attribution
+  unreachable (certain):   0     the proxy could not be reached at all
+  any failure via proxy:   2     every failure on a proxied session
+  2 failure(s) cannot be attributed to proxy or target
+```
+
+An overloaded proxy usually *answers* with 502 or 504 rather than refusing the connection, so
+the browser sees an ordinary HTTP status and the session is recorded as `failed_status`. A metric
+counting only `failed_proxy` would report **zero** while the proxy caused every failure — which
+is exactly what happened in experiment D1 before this was fixed.
+
+The tempting correction, "a 5xx on a proxied session is a proxy failure", is the opposite
+mistake: it blames the proxy for the target's own outages. The `Via` header doesn't settle it
+either, since a proxy adds it to responses it forwards and responses it generates alike.
+
+So the truth is reported as a range. When the two numbers agree, attribution is certain; when
+they differ, the gap is precisely what cannot be known from the client side.
+
 `failed_setup` is **not** retryable on purpose: it means the browser is unhealthy, and retrying
 broken infrastructure turns a loud two-second failure into a confusing twenty-minute one.
 **Retry the request, never the infrastructure.**
@@ -702,6 +960,9 @@ Stated plainly, because a lab that overstates its own accuracy is worse than no 
 
 **Implementation**
 
+- **Proxy failures can only be bracketed, not counted.** When a proxy answers 502 rather than
+  refusing a connection, no client-side signal distinguishes it from the target answering 502.
+  Reported as a range; see [Metrics and output](#metrics-and-output).
 - **Error classification is string matching on Chromium's error text.** A browser update
   renaming a code would silently reclassify failures. It degrades to `failed_navigation` rather
   than crashing, and is covered by tests.

@@ -134,7 +134,9 @@ def write_summary(
             "sessions_started": metrics.sessions_started,
             "sessions_completed": metrics.sessions_completed,
             "sessions_failed": metrics.sessions_failed,
-            "proxy_failures": metrics.proxy_failures,
+            # A bracket, not a number: see ExperimentMetrics.failures_via_proxy.
+            "proxy_connection_failures": metrics.proxy_connection_failures,
+            "failures_via_proxy": metrics.failures_via_proxy,
             "sessions_via_proxy": metrics.sessions_via_proxy,
         },
         "status_counts": {status.value: count for status, count in metrics.status_counts.items()},

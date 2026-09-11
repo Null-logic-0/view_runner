@@ -1,0 +1,34 @@
+# Experiment C - scale
+#
+# 50 sessions at concurrency 10. Does the picture hold at scale?
+
+[target]
+url = "http://127.0.0.1:8500/exp-c"
+expected_status = 200
+
+[session]
+count = 50
+duration_seconds = 30
+wait_until = "load"
+
+[browser]
+headless = true
+user_agent = "browser-automation-lab/0.1.0"
+
+[runner]
+concurrency = 10
+
+[proxy]
+enabled = true
+file = "proxies.local.txt"
+default_scheme = "http"
+
+[telemetry]
+level = "WARNING"
+format = "text"
+results_dir = "results"
+
+[failure]
+max_attempts = 1
+retry_backoff_seconds = 0.25
+abort_after_consecutive_failures = 0

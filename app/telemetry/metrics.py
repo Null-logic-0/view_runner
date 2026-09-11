@@ -146,8 +146,44 @@ class ExperimentMetrics:
         return dict(Counter(result.status for result in self.results))
 
     @property
-    def proxy_failures(self) -> int:
+    def proxy_connection_failures(self) -> int:
+        """Sessions where the proxy itself could not be reached.
+
+        Unambiguous, and a LOWER bound on proxy-caused failures: FAILED_PROXY
+        means Chromium could not establish a connection to the proxy at all.
+        """
         return sum(1 for r in self.results if r.status is SessionStatus.FAILED_PROXY)
+
+    @property
+    def failures_via_proxy(self) -> int:
+        """Every failure on a session that used a proxy -- an UPPER bound.
+
+        Two numbers rather than one, because proxy attribution is genuinely
+        undecidable from the client side and reporting a single figure misleads.
+
+        An overloaded proxy usually *responds* 502 or 504 rather than refusing
+        the connection. The browser then sees an ordinary HTTP status, the
+        session is classified FAILED_STATUS, and a metric counting only
+        FAILED_PROXY reports zero while every failure was the proxy's doing.
+        That was a real under-count, found by experiment D1: three sessions
+        failed because the proxies returned 502, and the old `proxy_failures`
+        said 0.
+
+        The tempting fix -- "a 5xx on a proxied session is a proxy failure" --
+        is the opposite error: it blames the proxy for the target's own
+        outages. The Via header does not help either, because a proxy adds it
+        to responses it forwards and responses it generates alike.
+
+        So the honest answer is a bracket. The true count lies between
+        `proxy_connection_failures` and `failures_via_proxy`; when they differ,
+        the gap is exactly what cannot be attributed.
+        """
+        return sum(1 for r in self.results if r.used_proxy and not r.ok)
+
+    @property
+    def proxy_attribution_is_certain(self) -> bool:
+        """True when the bracket collapses to a single number."""
+        return self.proxy_connection_failures == self.failures_via_proxy
 
     @property
     def sessions_via_proxy(self) -> int:
@@ -200,6 +236,16 @@ class ExperimentMetrics:
 
         if self.sessions_retried:
             lines.append(f"{'  (retried):':<24}{self.sessions_retried:>18,}")
+
+        if self.sessions_via_proxy:
+            lines += ["", "Proxy attribution"]
+            lines.append(f"{'  unreachable (certain):':<24}{self.proxy_connection_failures:>18,}")
+            lines.append(f"{'  any failure via proxy:':<24}{self.failures_via_proxy:>18,}")
+            if not self.proxy_attribution_is_certain:
+                unattributable = self.failures_via_proxy - self.proxy_connection_failures
+                lines.append(
+                    f"  {unattributable} failure(s) cannot be attributed to proxy or target"
+                )
 
         lines += [
             "",

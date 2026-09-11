@@ -49,7 +49,9 @@ from types import TracebackType
 from typing import Final, Self
 from urllib.parse import urlsplit
 
-
+# Headers that describe a single hop and must not be forwarded to the next one.
+# Forwarding `Connection: keep-alive` to the target, for instance, would make
+# the target's idea of the connection disagree with the client's.
 HOP_BY_HOP: Final = frozenset(
     {
         "connection",
@@ -235,13 +237,14 @@ class ProxyServer:
         self.stats.connects += 1
         self._note(f"CONNECT {target}")
         await _respond(writer, b"HTTP/1.1 200 Connection Established\r\n\r\n")
+        # From here the proxy understands nothing. It moves bytes.
         await asyncio.gather(
             _pipe(reader, upstream_writer),
             _pipe(upstream_reader, writer),
         )
         await _close(upstream_writer)
 
-    # HTTP: parse, rewrite, forward 
+    # HTTP: parse, rewrite, forward
 
     async def _forward(
         self,
@@ -270,7 +273,8 @@ class ProxyServer:
         self.stats.requests += 1
         self._note(f"{method} {target}")
 
-     
+        # Absolute form -> origin form. This rewrite is the heart of an HTTP
+        # proxy: the client addressed us, and we address the target.
         path = parts.path or "/"
         if parts.query:
             path = f"{path}?{parts.query}"
@@ -298,8 +302,7 @@ class ProxyServer:
             print(f"[proxy {self._requested_port or self.port}] {line}", file=sys.stderr)
 
 
-
-# Byte plumbing                                                                
+# Byte plumbing
 
 
 def _header(headers: list[bytes], name: str) -> str | None:
@@ -335,7 +338,7 @@ async def _close(writer: asyncio.StreamWriter) -> None:
         await writer.wait_closed()
 
 
-# Entry point                                                                  
+# Entry point
 
 
 async def _serve_forever(server: ProxyServer) -> None:
@@ -376,5 +379,5 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-if __name__ == "__main__":  
+if __name__ == "__main__":  # pragma: no cover
     sys.exit(main())

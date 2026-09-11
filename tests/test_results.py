@@ -126,7 +126,8 @@ def test_summary_records_counts_timings_and_config(tmp_path: Path) -> None:
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert payload["experiment_id"] == "exp-1"
     assert payload["counts"]["sessions_completed"] == 2
-    assert payload["counts"]["proxy_failures"] == 1
+    assert payload["counts"]["proxy_connection_failures"] == 1
+    assert payload["counts"]["failures_via_proxy"] == 1
     assert payload["status_counts"]["failed_proxy"] == 1
     assert payload["timings_ms"]["average_navigation"] == 8.6
     assert payload["success_rate"] == pytest.approx(2 / 3)

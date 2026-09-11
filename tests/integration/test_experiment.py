@@ -82,7 +82,8 @@ async def test_an_experiment_through_dead_proxies_fails_cleanly_and_completely(
 
     assert metrics.sessions_started == 3
     assert metrics.sessions_completed == 0
-    assert metrics.proxy_failures == 3
+    assert metrics.proxy_connection_failures == 3
+    assert metrics.failures_via_proxy == 3
     assert metrics.sessions_via_proxy == 3
     assert metrics.average_navigation_ms is None, "nothing completed, so there is no average"
     assert metrics.total_ms < 30_000, "failures must not have waited out the dwell"
