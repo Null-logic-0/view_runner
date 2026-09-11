@@ -11,13 +11,14 @@ import pytest
 
 from app.experiment import run_experiment_from_config
 from app.telemetry.metrics import SessionResult, SessionStatus
-from tests.conftest import LocalServer, make_config
+from lab.target_server import TargetServer
+from tests.conftest import make_config
 
 pytestmark = pytest.mark.integration
 
 
 async def test_a_whole_experiment_runs_and_the_server_sees_every_session(
-    local_server: LocalServer,
+    local_server: TargetServer,
 ) -> None:
     config = make_config(
         target={"url": f"{local_server.base_url}/page"},
@@ -36,10 +37,10 @@ async def test_a_whole_experiment_runs_and_the_server_sees_every_session(
     assert metrics.average_dwell_ms is not None and metrics.average_dwell_ms >= 100
 
     # Ground truth: three requests really arrived.
-    assert local_server.hits == ["/page", "/page", "/page"]
+    assert local_server.paths == ["/page", "/page", "/page"]
 
 
-async def test_sessions_run_sequentially_not_all_at_once(local_server: LocalServer) -> None:
+async def test_sessions_run_sequentially_not_all_at_once(local_server: TargetServer) -> None:
     """Wall clock must be at least the sum of the dwells, not one dwell."""
     config = make_config(
         target={"url": local_server.base_url},
@@ -51,7 +52,7 @@ async def test_sessions_run_sequentially_not_all_at_once(local_server: LocalServ
     assert metrics.total_ms >= 1200, "three 400 ms dwells cannot finish in under 1.2 s"
 
 
-async def test_results_stream_out_during_the_run(local_server: LocalServer) -> None:
+async def test_results_stream_out_during_the_run(local_server: TargetServer) -> None:
     seen: list[SessionResult] = []
     config = make_config(
         target={"url": local_server.base_url},
@@ -65,7 +66,7 @@ async def test_results_stream_out_during_the_run(local_server: LocalServer) -> N
 
 
 async def test_an_experiment_through_dead_proxies_fails_cleanly_and_completely(
-    local_server: LocalServer, tmp_path: Path, closed_port: int
+    local_server: TargetServer, tmp_path: Path, closed_port: int
 ) -> None:
     """Every session fails, every failure is classified, nothing reaches the target."""
     proxy_file = tmp_path / "proxies.txt"
@@ -85,11 +86,11 @@ async def test_an_experiment_through_dead_proxies_fails_cleanly_and_completely(
     assert metrics.sessions_via_proxy == 3
     assert metrics.average_navigation_ms is None, "nothing completed, so there is no average"
     assert metrics.total_ms < 30_000, "failures must not have waited out the dwell"
-    assert local_server.hits == []
+    assert local_server.paths == []
 
 
 async def test_an_unexpected_status_fails_the_experiment_rather_than_passing_it(
-    local_server: LocalServer,
+    local_server: TargetServer,
 ) -> None:
     config = make_config(
         target={"url": f"{local_server.base_url}/status?code=503"},
@@ -103,7 +104,7 @@ async def test_an_unexpected_status_fails_the_experiment_rather_than_passing_it(
 
 
 async def test_concurrent_sessions_overlap_against_a_real_browser(
-    local_server: LocalServer,
+    local_server: TargetServer,
 ) -> None:
     """Six 1-second dwells finish in about 2 s at concurrency 3, not 6 s."""
     config = make_config(
@@ -120,7 +121,7 @@ async def test_concurrent_sessions_overlap_against_a_real_browser(
     assert metrics.total_ms > 1_800, "cannot beat two sequential batches of 1 s"
 
 
-async def test_concurrent_sessions_do_not_leak_contexts(local_server: LocalServer) -> None:
+async def test_concurrent_sessions_do_not_leak_contexts(local_server: TargetServer) -> None:
     """Every context must be closed even when eight of them overlapped."""
     config = make_config(
         target={"url": local_server.base_url},
@@ -133,7 +134,7 @@ async def test_concurrent_sessions_do_not_leak_contexts(local_server: LocalServe
 
 
 async def test_results_remain_ordered_by_session_id_under_concurrency(
-    local_server: LocalServer,
+    local_server: TargetServer,
 ) -> None:
     config = make_config(
         target={"url": local_server.base_url},
@@ -146,7 +147,7 @@ async def test_results_remain_ordered_by_session_id_under_concurrency(
 
 
 async def test_a_run_writes_results_and_a_summary_to_disk(
-    local_server: LocalServer, tmp_path: Path
+    local_server: TargetServer, tmp_path: Path
 ) -> None:
     """The whole point of Phase 12: numbers that outlive the process."""
     import json
@@ -174,7 +175,7 @@ async def test_a_run_writes_results_and_a_summary_to_disk(
     assert summary["environment"]["playwright"]
 
 
-async def test_results_can_be_disabled(local_server: LocalServer) -> None:
+async def test_results_can_be_disabled(local_server: TargetServer) -> None:
     config = make_config(
         target={"url": local_server.base_url},
         session={"count": 1, "duration_seconds": 0},

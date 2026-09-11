@@ -11,13 +11,14 @@ from app.browser.factory import BrowserFactory
 from app.browser.session import run_session
 from app.proxy.parser import Proxy
 from app.telemetry.metrics import SessionStatus
-from tests.conftest import LocalServer, make_config
+from lab.target_server import TargetServer
+from tests.conftest import make_config
 
 pytestmark = pytest.mark.integration
 
 
 async def test_a_successful_session_reports_every_measurement(
-    local_server: LocalServer,
+    local_server: TargetServer,
 ) -> None:
     async with BrowserFactory(make_config()) as factory:
         result = await run_session(
@@ -42,10 +43,10 @@ async def test_a_successful_session_reports_every_measurement(
     assert result.dwell_ms is not None
 
     # Ground truth: the server actually received the request.
-    assert local_server.hits == ["/page"]
+    assert local_server.paths == ["/page"]
 
 
-async def test_total_time_covers_the_phases_it_contains(local_server: LocalServer) -> None:
+async def test_total_time_covers_the_phases_it_contains(local_server: TargetServer) -> None:
     async with BrowserFactory(make_config()) as factory:
         result = await run_session(
             factory=factory,
@@ -62,7 +63,7 @@ async def test_total_time_covers_the_phases_it_contains(local_server: LocalServe
 # calibration
 
 
-async def test_dwell_honours_the_configured_duration(local_server: LocalServer) -> None:
+async def test_dwell_honours_the_configured_duration(local_server: TargetServer) -> None:
     """The duration is an argument. The number 30 appears nowhere in session.py."""
     async with BrowserFactory(make_config()) as factory:
         result = await run_session(
@@ -77,7 +78,7 @@ async def test_dwell_honours_the_configured_duration(local_server: LocalServer) 
     assert 500 <= result.dwell_ms < 1500
 
 
-async def test_a_zero_duration_session_still_completes(local_server: LocalServer) -> None:
+async def test_a_zero_duration_session_still_completes(local_server: TargetServer) -> None:
     """Navigate-then-close: a legitimate experiment measuring pure startup cost."""
     async with BrowserFactory(make_config()) as factory:
         result = await run_session(
@@ -93,7 +94,7 @@ async def test_a_zero_duration_session_still_completes(local_server: LocalServer
     assert result.dwell_ms < 100
 
 
-async def test_navigation_timing_tracks_a_delay_we_caused(local_server: LocalServer) -> None:
+async def test_navigation_timing_tracks_a_delay_we_caused(local_server: TargetServer) -> None:
     """Instrument calibration: measure a known value before trusting unknown ones.
 
     The server sleeps 800 ms before responding. If navigation_ms came back at
@@ -118,7 +119,7 @@ async def test_navigation_timing_tracks_a_delay_we_caused(local_server: LocalSer
 
 
 async def test_a_dead_proxy_is_reported_as_a_proxy_failure(
-    local_server: LocalServer, closed_port: int
+    local_server: TargetServer, closed_port: int
 ) -> None:
     async with BrowserFactory(make_config()) as factory:
         result = await run_session(
@@ -139,7 +140,7 @@ async def test_a_dead_proxy_is_reported_as_a_proxy_failure(
     assert result.total_ms > result.setup_ms
     assert result.error_type == "Error"
     assert "ERR_PROXY_CONNECTION_FAILED" in (result.error_message or "")
-    assert local_server.hits == []
+    assert local_server.paths == []
 
 
 async def test_an_unreachable_target_is_a_navigation_failure(closed_port: int) -> None:
@@ -156,7 +157,7 @@ async def test_an_unreachable_target_is_a_navigation_failure(closed_port: int) -
     assert "ERR_CONNECTION_REFUSED" in (result.error_message or "")
 
 
-async def test_a_slow_target_times_out_within_its_budget(local_server: LocalServer) -> None:
+async def test_a_slow_target_times_out_within_its_budget(local_server: TargetServer) -> None:
     config = make_config(timeouts={"navigation_ms": 500})
     async with BrowserFactory(config) as factory:
         result = await run_session(
@@ -173,7 +174,7 @@ async def test_a_slow_target_times_out_within_its_budget(local_server: LocalServ
 
 
 async def test_an_unexpected_http_status_is_a_failure_not_a_success(
-    local_server: LocalServer,
+    local_server: TargetServer,
 ) -> None:
     """The old project printed 'Session completed successfully.' regardless."""
     async with BrowserFactory(make_config()) as factory:
@@ -191,7 +192,7 @@ async def test_an_unexpected_http_status_is_a_failure_not_a_success(
     assert "expected HTTP 200, got 503" in (result.error_message or "")
 
 
-async def test_expected_status_is_configurable(local_server: LocalServer) -> None:
+async def test_expected_status_is_configurable(local_server: TargetServer) -> None:
     async with BrowserFactory(make_config()) as factory:
         result = await run_session(
             factory=factory,
@@ -223,7 +224,7 @@ async def test_a_failed_session_leaks_no_context(closed_port: int) -> None:
 
 
 async def test_a_proxy_password_never_reaches_the_result(
-    local_server: LocalServer, closed_port: int
+    local_server: TargetServer, closed_port: int
 ) -> None:
     proxy = Proxy(host="127.0.0.1", port=closed_port, username="bob", password="hunter2")
     async with BrowserFactory(make_config()) as factory:

@@ -12,12 +12,12 @@ from typing import Any
 import pytest
 
 from app import cli
-from tests.conftest import LocalServer
+from lab.target_server import TargetServer
 
 pytestmark = pytest.mark.integration
 
 
-def test_doctor_passes_on_a_healthy_setup(local_server: LocalServer, capsys: Any) -> None:
+def test_doctor_passes_on_a_healthy_setup(local_server: TargetServer, capsys: Any) -> None:
     code = cli.main(["doctor", "--url", local_server.base_url, "--results-dir", ""])
     out = capsys.readouterr().out
 
@@ -34,7 +34,7 @@ def test_doctor_fails_when_the_configuration_is_invalid(capsys: Any) -> None:
 
 
 def test_run_executes_an_experiment_and_writes_results(
-    local_server: LocalServer, tmp_path: Path, capsys: Any
+    local_server: TargetServer, tmp_path: Path, capsys: Any
 ) -> None:
     code = cli.main(
         [
@@ -65,7 +65,7 @@ def test_run_executes_an_experiment_and_writes_results(
 
 
 def test_failing_sessions_alone_do_not_make_the_command_fail(
-    local_server: LocalServer, closed_port: int, capsys: Any
+    local_server: TargetServer, closed_port: int, capsys: Any
 ) -> None:
     """Sessions failing is a measurement. The old project exited 0 always; this
     exits 0 only because the run itself was sound."""
@@ -113,7 +113,7 @@ def test_fail_under_turns_a_bad_success_rate_into_a_non_zero_exit(
 
 
 def test_an_unreadable_proxy_file_is_a_clean_error_not_a_traceback(
-    local_server: LocalServer, tmp_path: Path, capsys: Any
+    local_server: TargetServer, tmp_path: Path, capsys: Any
 ) -> None:
     code = cli.main(
         [

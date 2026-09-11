@@ -77,6 +77,9 @@ select = [
     # secret is .gitignore plus never writing one into a file, not a linter.
     "S105",
     "S106",
+    # S310 (urlopen with an unvalidated scheme): tests/test_bench.py fetches
+    # http:// URLs it built itself from a loopback server's own address.
+    "S310",
     # S603 (subprocess with untrusted input): tests/test_runner.py runs
     # sys.executable with a string literal from this repo to verify an
     # architectural rule. No untrusted input is involved.

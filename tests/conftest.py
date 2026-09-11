@@ -1,31 +1,19 @@
 """Shared fixtures.
 
-`local_server` is a minimal stand-in for the lab bench: a real HTTP server on
-loopback that records what actually arrived. Having ground truth on the server
-side is what lets an integration test assert "the browser really fetched this"
-rather than "no exception was raised".
+The target server is the real lab bench (`lab/target_server.py`), not a
+second copy defined here. One definition means the tests exercise the same
+server a human runs, so the bench cannot silently drift from what the suite
+verifies.
 """
 
 import socket
-import threading
-import time
 from collections.abc import Iterator
-from dataclasses import dataclass, field
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
-from urllib.parse import parse_qs
 
 import pytest
 
 from app.config import Config, build_config
-
-_BODY = b"<!doctype html><html><head><title>bench</title></head><body>ok</body></html>"
-
-
-@dataclass
-class LocalServer:
-    base_url: str
-    hits: list[str] = field(default_factory=list)
+from lab.target_server import TargetServer
 
 
 @pytest.fixture
@@ -44,51 +32,10 @@ def closed_port() -> int:
 
 
 @pytest.fixture
-def local_server() -> Iterator[LocalServer]:
-    record: list[str] = []
-
-    class Handler(BaseHTTPRequestHandler):
-        """Deterministic endpoints, so failures can be caused rather than waited for.
-
-        /                 200, a small HTML page
-        /slow?ms=N        200 after N milliseconds  -- for calibrating timings
-                                                       and forcing timeouts
-        /status?code=N    responds with HTTP N      -- for status handling
-        """
-
-        def do_GET(self) -> None:
-            record.append(self.path)
-            route, _, raw_query = self.path.partition("?")
-            query = parse_qs(raw_query)
-
-            if route == "/slow":
-                time.sleep(int(query.get("ms", ["0"])[0]) / 1000)
-                self._respond(200)
-            elif route == "/status":
-                self._respond(int(query.get("code", ["200"])[0]))
-            else:
-                self._respond(200)
-
-        def _respond(self, code: int) -> None:
-            self.send_response(code)
-            self.send_header("Content-Type", "text/html")
-            self.send_header("Content-Length", str(len(_BODY)))
-            self.end_headers()
-            self.wfile.write(_BODY)
-
-        def log_message(self, *args: Any) -> None:
-            """Silence the default stderr access log."""
-
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    port = server.server_address[1]
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield LocalServer(base_url=f"http://127.0.0.1:{port}", hits=record)
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)
+def local_server() -> Iterator[TargetServer]:
+    """The lab target, on a port the OS picks so parallel runs cannot collide."""
+    with TargetServer() as server:
+        yield server
 
 
 def make_config(**sections: dict[str, Any]) -> Config:

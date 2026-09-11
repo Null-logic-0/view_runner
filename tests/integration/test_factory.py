@@ -14,7 +14,8 @@ from playwright.async_api import Error as PlaywrightError
 from app.browser.factory import BrowserFactory
 from app.errors import BrowserLaunchError
 from app.proxy.parser import Proxy
-from tests.conftest import LocalServer, make_config
+from lab.target_server import TargetServer
+from tests.conftest import make_config
 
 pytestmark = pytest.mark.integration
 
@@ -68,7 +69,7 @@ async def test_an_impossible_launch_timeout_raises_browser_launch_error() -> Non
 
 
 async def test_a_page_really_loads_and_the_server_really_sees_it(
-    local_server: LocalServer,
+    local_server: TargetServer,
 ) -> None:
     """Ground truth on both ends: the client says 200, the server logged the hit."""
     async with BrowserFactory(make_config()) as factory, factory.new_context() as context:
@@ -79,10 +80,10 @@ async def test_a_page_really_loads_and_the_server_really_sees_it(
         assert response.status == 200
         assert await page.title() == "bench"
 
-    assert local_server.hits == ["/hello"]
+    assert local_server.paths == ["/hello"]
 
 
-async def test_viewport_is_applied_to_the_page(local_server: LocalServer) -> None:
+async def test_viewport_is_applied_to_the_page(local_server: TargetServer) -> None:
     config = make_config(browser={"viewport_width": 640, "viewport_height": 480})
     async with BrowserFactory(config) as factory, factory.new_context() as context:
         page = await context.new_page()
@@ -91,7 +92,7 @@ async def test_viewport_is_applied_to_the_page(local_server: LocalServer) -> Non
         assert await page.evaluate("window.innerHeight") == 480
 
 
-async def test_user_agent_is_applied_to_the_page(local_server: LocalServer) -> None:
+async def test_user_agent_is_applied_to_the_page(local_server: TargetServer) -> None:
     config = make_config(browser={"user_agent": "browser-automation-lab/0.1.0"})
     async with BrowserFactory(config) as factory, factory.new_context() as context:
         page = await context.new_page()
@@ -99,7 +100,7 @@ async def test_user_agent_is_applied_to_the_page(local_server: LocalServer) -> N
         assert await page.evaluate("navigator.userAgent") == "browser-automation-lab/0.1.0"
 
 
-async def test_locale_is_applied_to_the_page(local_server: LocalServer) -> None:
+async def test_locale_is_applied_to_the_page(local_server: TargetServer) -> None:
     config = make_config(browser={"locale": "de-DE"})
     async with BrowserFactory(config) as factory, factory.new_context() as context:
         page = await context.new_page()
@@ -107,7 +108,7 @@ async def test_locale_is_applied_to_the_page(local_server: LocalServer) -> None:
         assert await page.evaluate("navigator.language") == "de-DE"
 
 
-async def test_contexts_do_not_share_cookies(local_server: LocalServer) -> None:
+async def test_contexts_do_not_share_cookies(local_server: TargetServer) -> None:
     """Isolation is the reason a context is the right unit for a session."""
     async with BrowserFactory(make_config()) as factory, factory.new_context() as first:
         await first.add_cookies([{"name": "session", "value": "abc", "url": local_server.base_url}])
@@ -142,7 +143,7 @@ async def test_contexts_do_not_accumulate_across_sessions() -> None:
 # ------------------------------------------------------------------ proxy --
 
 
-async def test_a_dead_proxy_makes_navigation_fail(local_server: LocalServer) -> None:
+async def test_a_dead_proxy_makes_navigation_fail(local_server: TargetServer) -> None:
     """Proves the per-context proxy is actually wired up.
 
     If Playwright ignored the setting, this navigation would succeed -- the
@@ -154,10 +155,10 @@ async def test_a_dead_proxy_makes_navigation_fail(local_server: LocalServer) -> 
         with pytest.raises(PlaywrightError, match="ERR_PROXY_CONNECTION_FAILED"):
             await page.goto(local_server.base_url, timeout=8000)
 
-    assert local_server.hits == [], "request reached the server, so the proxy was bypassed"
+    assert local_server.paths == [], "request reached the server, so the proxy was bypassed"
 
 
-async def test_proxy_applies_per_context_not_per_browser(local_server: LocalServer) -> None:
+async def test_proxy_applies_per_context_not_per_browser(local_server: TargetServer) -> None:
     """One browser process, two contexts, different proxy settings.
 
     This is the capability Playwright was chosen for: with Selenium the proxy
@@ -175,4 +176,4 @@ async def test_proxy_applies_per_context_not_per_browser(local_server: LocalServ
             assert response is not None
             assert response.status == 200
 
-    assert local_server.hits == ["/"]
+    assert local_server.paths == ["/"]
