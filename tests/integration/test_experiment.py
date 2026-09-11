@@ -100,3 +100,46 @@ async def test_an_unexpected_status_fails_the_experiment_rather_than_passing_it(
 
     assert metrics.sessions_completed == 0
     assert metrics.status_counts == {SessionStatus.FAILED_STATUS: 2}
+
+
+async def test_concurrent_sessions_overlap_against_a_real_browser(
+    local_server: LocalServer,
+) -> None:
+    """Six 1-second dwells finish in about 2 s at concurrency 3, not 6 s."""
+    config = make_config(
+        target={"url": local_server.base_url},
+        session={"count": 6, "duration_seconds": 1.0},
+        runner={"concurrency": 3},
+    )
+
+    metrics = await run_experiment_from_config(config)
+
+    assert metrics.sessions_completed == 6
+    assert len(local_server.hits) == 6
+    assert metrics.total_ms < 5_000, f"no overlap happened: {metrics.total_ms:.0f} ms"
+    assert metrics.total_ms > 1_800, "cannot beat two sequential batches of 1 s"
+
+
+async def test_concurrent_sessions_do_not_leak_contexts(local_server: LocalServer) -> None:
+    """Every context must be closed even when eight of them overlapped."""
+    config = make_config(
+        target={"url": local_server.base_url},
+        session={"count": 8, "duration_seconds": 0.2},
+        runner={"concurrency": 4},
+    )
+
+    metrics = await run_experiment_from_config(config)
+    assert metrics.sessions_completed == 8
+
+
+async def test_results_remain_ordered_by_session_id_under_concurrency(
+    local_server: LocalServer,
+) -> None:
+    config = make_config(
+        target={"url": local_server.base_url},
+        session={"count": 6, "duration_seconds": 0.1},
+        runner={"concurrency": 6},
+    )
+
+    metrics = await run_experiment_from_config(config)
+    assert [r.session_id for r in metrics.results] == [1, 2, 3, 4, 5, 6]

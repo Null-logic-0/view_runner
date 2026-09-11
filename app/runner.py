@@ -19,6 +19,7 @@ What it does not own:
     to an optional callback.
 """
 
+import asyncio
 import time
 import uuid
 from collections.abc import Callable
@@ -59,43 +60,71 @@ async def run_experiment(
     *,
     run_session: SessionRunner,
     count: int,
+    concurrency: int = 1,
     pool: ProxyPool | None = None,
     experiment_id: str | None = None,
     on_result: ResultCallback | None = None,
 ) -> ExperimentMetrics:
-    """Run `count` sessions one after another and report what happened.
+    """Run `count` sessions with at most `concurrency` in flight at once.
 
-    Strictly sequential. Session N+1 does not begin until session N has
-    finished and its result has been recorded -- which is the property that
-    makes this version easy to reason about, and the one Phase 11 gives up on
-    purpose.
+    concurrency = 1 is sequential. There is no separate sequential code path:
+    a semaphore of one admits exactly one task at a time, so the two cannot
+    drift apart as the code changes.
 
-    `on_result` is called as each result arrives rather than at the end. A
-    50-session experiment at 30 s each runs for 25 minutes; if results only
-    existed in memory until the final return, a crash at session 48 would
-    throw away 24 minutes of data. Exceptions from the callback are
-    deliberately not caught: a results writer that is silently failing is
-    worse than one that stops the run.
+    Structured concurrency, via TaskGroup rather than gather. `gather`
+    propagates the first exception but leaves its siblings running, detached --
+    which here means orphaned browser contexts accumulating in a Chromium
+    process after the experiment has already "failed". A TaskGroup cancels and
+    awaits its children before the block exits, so nothing escapes.
+
+    The cost of TaskGroup is that failures arrive as an ExceptionGroup. That is
+    the accurate shape: several sessions really can fail at the same instant.
+
+    Memory scales with `count`, because every task is created up front. At a
+    few thousand sessions that is a few MB. For a much larger run the right
+    shape is a fixed set of workers pulling from an asyncio.Queue, which bounds
+    memory to the worker count instead.
     """
-    experiment_id = experiment_id or new_experiment_id()
+    if concurrency < 1:
+        raise ValueError(f"concurrency must be at least 1, got {concurrency}")
+
+    run_id = experiment_id or new_experiment_id()
     started_at = time.time()
     began = time.monotonic()
 
-    results: list[SessionResult] = []
-    for session_id in range(1, count + 1):
-        # Pulled per session rather than zipped up front, so the pool's
-        # rotation is what decides -- and Phase 11 can hand out proxies in
-        # completion order without changing this line.
-        proxy = pool.next_proxy() if pool is not None else None
+    # Proxies are assigned BEFORE anything runs. Pulling from the pool inside
+    # each task would make assignment depend on scheduling order, so session 3
+    # would get a different proxy on every run and experiments would stop being
+    # reproducible. Execution order is nondeterministic; assignment is not.
+    assignments = [
+        (session_id, pool.next_proxy() if pool is not None else None)
+        for session_id in range(1, count + 1)
+    ]
 
-        result = await run_session(experiment_id=experiment_id, session_id=session_id, proxy=proxy)
-        results.append(result)
+    # Pre-sized, written by index: results stay ordered by session_id even
+    # though sessions finish in whatever order they finish.
+    slots: list[SessionResult | None] = [None] * count
+    limiter = asyncio.Semaphore(concurrency)
+
+    async def run_one(index: int, session_id: int, proxy: Proxy | None) -> None:
+        async with limiter:
+            result = await run_session(experiment_id=run_id, session_id=session_id, proxy=proxy)
+
+        # Deliberately outside the semaphore: a slow results writer must not
+        # hold a concurrency slot. `on_result` is sync and contains no await,
+        # so it cannot interleave with another task even when several finish
+        # at once -- the same reasoning that lets ProxyPool run without a lock.
+        slots[index] = result
         if on_result is not None:
             on_result(result)
 
+    async with asyncio.TaskGroup() as group:
+        for index, (session_id, proxy) in enumerate(assignments):
+            group.create_task(run_one(index, session_id, proxy))
+
     return ExperimentMetrics(
-        experiment_id=experiment_id,
+        experiment_id=run_id,
         started_at=started_at,
         total_ms=round((time.monotonic() - began) * 1000, 3),
-        results=tuple(results),
+        results=tuple(result for result in slots if result is not None),
     )

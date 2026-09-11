@@ -15,15 +15,12 @@ from typing import cast
 from app.browser.factory import BrowserFactory
 from app.browser.session import WaitUntil, run_session
 from app.config import Config
-from app.errors import ConfigurationError
 from app.proxy.parser import ParseReport, Proxy, load_proxies
 from app.proxy.pool import ProxyPool
 from app.runner import ResultCallback, run_experiment
 from app.telemetry.metrics import ExperimentMetrics, SessionResult
 
-# Module-level logger, unconfigured on purpose. A library logs unconditionally
-# and lets the application decide where it goes; until Phase 12 attaches
-# handlers this is a no-op rather than stray output on someone's stdout.
+
 logger = logging.getLogger(__name__)
 
 
@@ -42,8 +39,7 @@ def build_proxy_pool(config: Config) -> tuple[ProxyPool | None, ParseReport | No
     for error in report.errors:
         logger.warning("proxy file %s: %s", config.proxy.file, error)
 
-    # Raises ProxyPoolEmptyError if nothing usable survived -- fatal, because
-    # "proxies enabled" plus "no proxies" is an experiment that cannot run.
+
     return ProxyPool(report.proxies), report
 
 
@@ -54,18 +50,6 @@ async def run_experiment_from_config(
     on_result: ResultCallback | None = None,
 ) -> ExperimentMetrics:
     """Run the experiment a `Config` describes."""
-    # Checked before anything is launched. Silently running sequentially when
-    # the file says concurrency = 5 would produce a clean run, identical
-    # throughput, and the false conclusion that concurrency does not help.
-    # For a measurement tool, ignoring a parameter is worse than refusing.
-    if config.runner.concurrency != 1:
-        raise ConfigurationError(
-            [
-                f"runner.concurrency is {config.runner.concurrency}, but only "
-                "sequential execution is implemented; set it to 1"
-            ]
-        )
-
     pool, _report = build_proxy_pool(config)
 
     async with BrowserFactory(config) as factory:
@@ -89,6 +73,7 @@ async def run_experiment_from_config(
         return await run_experiment(
             run_session=session,
             count=config.session.count,
+            concurrency=config.runner.concurrency,
             pool=pool,
             experiment_id=experiment_id,
             on_result=on_result,

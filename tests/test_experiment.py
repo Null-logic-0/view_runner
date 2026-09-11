@@ -1,33 +1,17 @@
 """Unit tests for the composition root.
 
-These import the browser layer but never launch a browser: the concurrency
-guard runs before anything is started, and proxy loading is pure file I/O.
+These import the browser layer but never launch a browser: proxy loading is
+pure file I/O. End-to-end wiring, including concurrency, is covered by
+tests/integration/test_experiment.py.
 """
 
 from pathlib import Path
 
 import pytest
 
-from app.errors import ConfigurationError, ProxyPoolEmptyError
-from app.experiment import build_proxy_pool, run_experiment_from_config
+from app.errors import ProxyPoolEmptyError
+from app.experiment import build_proxy_pool
 from tests.conftest import make_config
-
-
-async def test_concurrency_above_one_is_refused_not_silently_ignored() -> None:
-    """Silently running sequentially would produce a false experimental result."""
-    config = make_config(runner={"concurrency": 5})
-    with pytest.raises(ConfigurationError, match="only sequential execution is implemented"):
-        await run_experiment_from_config(config)
-
-
-async def test_the_guard_runs_before_anything_is_launched() -> None:
-    """Config points at an unreadable proxy file; the guard must fire first."""
-    config = make_config(
-        runner={"concurrency": 2},
-        proxy={"enabled": True, "file": "/nonexistent/proxies.txt"},
-    )
-    with pytest.raises(ConfigurationError):
-        await run_experiment_from_config(config)
 
 
 def test_no_pool_is_built_when_proxies_are_disabled() -> None:
