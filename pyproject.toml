@@ -1,0 +1,75 @@
+[project]
+name = "browser-automation-lab"
+description = "An educational lab for browser automation, proxy mechanics, concurrency and observability."
+readme = "README.md"
+requires-python = ">=3.12"
+dynamic = ["version"]
+
+dependencies = [
+    "playwright>=1.62,<2",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.8",
+    "mypy>=1.13",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+# The distribution is named "browser-automation-lab" but the import package is
+# "app", so hatchling cannot infer the mapping. State it explicitly.
+[tool.hatch.version]
+path = "app/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+
+# ---------------------------------------------------------------- pytest ----
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers --strict-config"
+markers = [
+    "integration: launches a real browser or touches the network (deselect with -m 'not integration')",
+]
+# "auto" means a bare `async def test_...` just works, with no per-test decorator.
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+
+
+# ------------------------------------------------------------------ ruff ----
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E", "W",   # pycodestyle
+    "F",        # pyflakes: undefined names, unused imports
+    "I",        # isort: import ordering
+    "N",        # pep8-naming
+    "UP",       # pyupgrade: modernise syntax for the target version
+    "B",        # bugbear: real bug patterns (mutable defaults, etc.)
+    "SIM",      # simplify
+    "ASYNC",    # blocking calls inside async def  <-- matters a lot in Phase 11
+    "S",        # bandit: security (hardcoded secrets, weak crypto)
+    "RUF",      # ruff's own rules
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101"]  # `assert` is the entire point of a test
+
+[tool.ruff.lint.isort]
+known-first-party = ["app"]
+
+
+# ------------------------------------------------------------------ mypy ----
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
