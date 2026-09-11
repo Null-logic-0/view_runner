@@ -6,11 +6,14 @@ side is what lets an integration test assert "the browser really fetched this"
 rather than "no exception was raised".
 """
 
+import socket
 import threading
+import time
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
+from urllib.parse import parse_qs
 
 import pytest
 
@@ -26,13 +29,48 @@ class LocalServer:
 
 
 @pytest.fixture
+def closed_port() -> int:
+    """A port on loopback with nothing listening.
+
+    Binding to port 0 lets the OS pick a free one; closing it immediately
+    leaves an address that will refuse connections. Do not simply hardcode a
+    low port: Chromium refuses to navigate to ~80 "unsafe" ports (1, 7, 22,
+    25, 6000 ...) with ERR_UNSAFE_PORT, which is a different failure entirely.
+    """
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port: int = probe.getsockname()[1]
+    return port
+
+
+@pytest.fixture
 def local_server() -> Iterator[LocalServer]:
     record: list[str] = []
 
     class Handler(BaseHTTPRequestHandler):
+        """Deterministic endpoints, so failures can be caused rather than waited for.
+
+        /                 200, a small HTML page
+        /slow?ms=N        200 after N milliseconds  -- for calibrating timings
+                                                       and forcing timeouts
+        /status?code=N    responds with HTTP N      -- for status handling
+        """
+
         def do_GET(self) -> None:
             record.append(self.path)
-            self.send_response(200)
+            route, _, raw_query = self.path.partition("?")
+            query = parse_qs(raw_query)
+
+            if route == "/slow":
+                time.sleep(int(query.get("ms", ["0"])[0]) / 1000)
+                self._respond(200)
+            elif route == "/status":
+                self._respond(int(query.get("code", ["200"])[0]))
+            else:
+                self._respond(200)
+
+        def _respond(self, code: int) -> None:
+            self.send_response(code)
             self.send_header("Content-Type", "text/html")
             self.send_header("Content-Length", str(len(_BODY)))
             self.end_headers()

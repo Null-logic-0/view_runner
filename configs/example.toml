@@ -10,10 +10,14 @@
 # Required. Must be a site you own or are authorised to test.
 # Defaults to the local bench server we build in a later phase.
 url = "http://127.0.0.1:8000/"
+expected_status = 200   # anything else counts the session as failed
 
 [session]
 count = 10              # how many sessions this experiment runs
 duration_seconds = 30   # how long each session stays open (0 = close immediately)
+# commit | domcontentloaded | load | networkidle
+# Decides what navigation_ms measures. "load" waits for subresources.
+wait_until = "load"
 
 [browser]
 engine = "chromium"     # chromium | firefox | webkit

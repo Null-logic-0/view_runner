@@ -26,6 +26,7 @@ MAX_CONCURRENCY: Final = 64
 _ENGINES: Final = ("chromium", "firefox", "webkit")
 _PROXY_SCHEMES: Final = ("http", "https", "socks5")
 _URL_SCHEMES: Final = ("http", "https")
+_WAIT_UNTIL: Final = ("commit", "domcontentloaded", "load", "networkidle")
 _DEFAULT_PROXY_FILE: Final = Path("proxies.txt")
 
 
@@ -34,12 +35,20 @@ class TargetConfig:
     """What we point the browser at. No default: a target is always required."""
 
     url: str
+    # Any other status means the page did not load as intended, so the session
+    # is a failure rather than something to sit on for 30 seconds.
+    expected_status: int = 200
 
 
 @dataclass(frozen=True, slots=True)
 class SessionConfig:
     count: int = 10
     duration_seconds: float = 30.0
+    # What "navigated" means, and therefore what navigation_ms measures.
+    # "load" waits for the page and its subresources; "commit" returns as soon
+    # as the first bytes of the response arrive. Every latency number in every
+    # experiment depends on this, so it belongs in config, not in a default.
+    wait_until: str = "load"
 
 
 @dataclass(frozen=True, slots=True)
@@ -259,11 +268,13 @@ def build_config(data: Mapping[str, Any], *, source: str | None = None) -> Confi
 
     target = _Section("target", data.get("target", _MISSING), problems)
     url = target.url("url")
+    expected_status = target.integer("expected_status", 200, minimum=100, maximum=599)
     target.finish()
 
     session = _Section("session", data.get("session", _MISSING), problems)
     count = session.integer("count", 10, minimum=1)
     duration = session.number("duration_seconds", 30.0, minimum=0.0)
+    wait_until = session.string("wait_until", "load", choices=_WAIT_UNTIL)
     session.finish()
 
     browser = _Section("browser", data.get("browser", _MISSING), problems)
@@ -300,8 +311,8 @@ def build_config(data: Mapping[str, Any], *, source: str | None = None) -> Confi
         raise ConfigurationError(problems, source=source)
 
     return Config(
-        target=TargetConfig(url=url),
-        session=SessionConfig(count=count, duration_seconds=duration),
+        target=TargetConfig(url=url, expected_status=expected_status),
+        session=SessionConfig(count=count, duration_seconds=duration, wait_until=wait_until),
         browser=BrowserConfig(
             engine=engine,
             headless=headless,
