@@ -40,3 +40,8 @@ default_scheme = "http" # http | https | socks5
 
 [runner]
 concurrency = 1         # start sequential; raise this once it is reliable
+
+[telemetry]
+level = "INFO"          # DEBUG | INFO | WARNING | ERROR | CRITICAL
+format = "text"         # text for humans, json for jq and later analysis
+results_dir = "results" # empty string disables writing results to disk

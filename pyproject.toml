@@ -70,6 +70,10 @@ select = [
     # secret is .gitignore plus never writing one into a file, not a linter.
     "S105",
     "S106",
+    # S603 (subprocess with untrusted input): tests/test_runner.py runs
+    # sys.executable with a string literal from this repo to verify an
+    # architectural rule. No untrusted input is involved.
+    "S603",
 ]
 
 [tool.ruff.lint.isort]

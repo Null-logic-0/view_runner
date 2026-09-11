@@ -20,6 +20,7 @@ What it does not own:
 """
 
 import asyncio
+import logging
 import time
 import uuid
 from collections.abc import Callable
@@ -44,6 +45,11 @@ class SessionRunner(Protocol):
 
 
 ResultCallback = Callable[[SessionResult], None]
+
+# Named "app.runner", so the handler attached to "app" in telemetry.logger
+# picks it up. Unconfigured here on purpose: a module logs, an application
+# decides where the output goes.
+logger = logging.getLogger(__name__)
 
 
 def new_experiment_id() -> str:
@@ -103,6 +109,14 @@ async def run_experiment(
 
     # Pre-sized, written by index: results stay ordered by session_id even
     # though sessions finish in whatever order they finish.
+    logger.info(
+        "experiment %s starting: %d sessions, concurrency %d",
+        run_id,
+        count,
+        concurrency,
+        extra={"experiment_id": run_id, "count": count, "concurrency": concurrency},
+    )
+
     slots: list[SessionResult | None] = [None] * count
     limiter = asyncio.Semaphore(concurrency)
 
@@ -115,6 +129,22 @@ async def run_experiment(
         # so it cannot interleave with another task even when several finish
         # at once -- the same reasoning that lets ProxyPool run without a lock.
         slots[index] = result
+        logger.info(
+            "session %d %s in %.0f ms",
+            session_id,
+            result.status.value,
+            result.total_ms,
+            extra={
+                "experiment_id": run_id,
+                "session_id": session_id,
+                "status": result.status.value,
+                "proxy": result.proxy_label,
+                "total_ms": result.total_ms,
+                "navigation_ms": result.navigation_ms,
+                "http_status": result.http_status,
+                "error_type": result.error_type,
+            },
+        )
         if on_result is not None:
             on_result(result)
 
@@ -122,9 +152,24 @@ async def run_experiment(
         for index, (session_id, proxy) in enumerate(assignments):
             group.create_task(run_one(index, session_id, proxy))
 
-    return ExperimentMetrics(
+    metrics = ExperimentMetrics(
         experiment_id=run_id,
         started_at=started_at,
         total_ms=round((time.monotonic() - began) * 1000, 3),
         results=tuple(result for result in slots if result is not None),
     )
+    logger.info(
+        "experiment %s finished: %d/%d completed in %.1f s",
+        run_id,
+        metrics.sessions_completed,
+        metrics.sessions_started,
+        metrics.total_ms / 1000,
+        extra={
+            "experiment_id": run_id,
+            "completed": metrics.sessions_completed,
+            "failed": metrics.sessions_failed,
+            "success_rate": metrics.success_rate,
+            "total_ms": metrics.total_ms,
+        },
+    )
+    return metrics

@@ -20,6 +20,7 @@ from typing import Any, Final
 from urllib.parse import urlsplit
 
 from app.errors import ConfigurationError
+from app.telemetry.logger import LOG_FORMATS, LOG_LEVELS
 
 MAX_CONCURRENCY: Final = 64
 
@@ -28,6 +29,7 @@ _PROXY_SCHEMES: Final = ("http", "https", "socks5")
 _URL_SCHEMES: Final = ("http", "https")
 _WAIT_UNTIL: Final = ("commit", "domcontentloaded", "load", "networkidle")
 _DEFAULT_PROXY_FILE: Final = Path("proxies.txt")
+_DEFAULT_RESULTS_DIR: Final = Path("results")
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,6 +89,19 @@ class RunnerConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class TelemetryConfig:
+    level: str = "INFO"
+    format: str = "text"
+    # Empty means "do not write results to disk" -- useful in tests and for a
+    # throwaway run. Same convention as browser.user_agent.
+    results_dir: Path = _DEFAULT_RESULTS_DIR
+
+    @property
+    def writes_results(self) -> bool:
+        return str(self.results_dir) not in ("", ".")
+
+
+@dataclass(frozen=True, slots=True)
 class Config:
     target: TargetConfig
     session: SessionConfig = field(default_factory=SessionConfig)
@@ -94,6 +109,7 @@ class Config:
     timeouts: TimeoutConfig = field(default_factory=TimeoutConfig)
     proxy: ProxyConfig = field(default_factory=ProxyConfig)
     runner: RunnerConfig = field(default_factory=RunnerConfig)
+    telemetry: TelemetryConfig = field(default_factory=TelemetryConfig)
 
 
 # Validation helper
@@ -202,7 +218,7 @@ class _Section:
             return default
         return raw
 
-    def path(self, key: str, default: Path) -> Path:
+    def path(self, key: str, default: Path, *, allow_empty: bool = False) -> Path:
         raw = self._take(key)
         if raw is _MISSING:
             return default
@@ -210,6 +226,10 @@ class _Section:
             self._fail(key, f"expected a string path, got {_kind(raw)}")
             return default
         if not raw.strip():
+            # An empty path is meaningful for some settings ("off") and a
+            # mistake for others, so the caller decides.
+            if allow_empty:
+                return Path()
             self._fail(key, "must not be empty")
             return default
         return Path(raw)
@@ -255,7 +275,15 @@ class _Section:
 
 # Public API
 
-_SECTIONS: Final = ("target", "session", "browser", "timeouts", "proxy", "runner")
+_SECTIONS: Final = (
+    "target",
+    "session",
+    "browser",
+    "timeouts",
+    "proxy",
+    "runner",
+    "telemetry",
+)
 
 
 def build_config(data: Mapping[str, Any], *, source: str | None = None) -> Config:
@@ -301,6 +329,12 @@ def build_config(data: Mapping[str, Any], *, source: str | None = None) -> Confi
     concurrency = runner.integer("concurrency", 1, minimum=1, maximum=MAX_CONCURRENCY)
     runner.finish()
 
+    telemetry = _Section("telemetry", data.get("telemetry", _MISSING), problems)
+    level = telemetry.string("level", "INFO", choices=LOG_LEVELS)
+    log_format = telemetry.string("format", "text", choices=LOG_FORMATS)
+    results_dir = telemetry.path("results_dir", _DEFAULT_RESULTS_DIR, allow_empty=True)
+    telemetry.finish()
+
     for key in data:
         if key not in _SECTIONS:
             near = difflib.get_close_matches(key, _SECTIONS, n=1)
@@ -324,6 +358,7 @@ def build_config(data: Mapping[str, Any], *, source: str | None = None) -> Confi
         timeouts=TimeoutConfig(launch_ms=launch_ms, navigation_ms=navigation_ms),
         proxy=ProxyConfig(enabled=proxy_enabled, file=proxy_file, default_scheme=proxy_scheme),
         runner=RunnerConfig(concurrency=concurrency),
+        telemetry=TelemetryConfig(level=level, format=log_format, results_dir=results_dir),
     )
 
 

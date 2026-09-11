@@ -143,3 +143,45 @@ async def test_results_remain_ordered_by_session_id_under_concurrency(
 
     metrics = await run_experiment_from_config(config)
     assert [r.session_id for r in metrics.results] == [1, 2, 3, 4, 5, 6]
+
+
+async def test_a_run_writes_results_and_a_summary_to_disk(
+    local_server: LocalServer, tmp_path: Path
+) -> None:
+    """The whole point of Phase 12: numbers that outlive the process."""
+    import json
+
+    from app.experiment import run_and_record
+
+    config = make_config(
+        target={"url": local_server.base_url},
+        session={"count": 3, "duration_seconds": 0.1},
+        telemetry={"results_dir": str(tmp_path / "results")},
+    )
+
+    metrics, jsonl_path = await run_and_record(config)
+
+    assert jsonl_path is not None and jsonl_path.exists()
+    rows = [json.loads(line) for line in jsonl_path.read_text(encoding="utf-8").splitlines()]
+    assert [row["session_id"] for row in rows] == [1, 2, 3]
+    assert all(row["status"] == "completed" for row in rows)
+
+    summary_path = jsonl_path.with_name(f"{metrics.experiment_id}.summary.json")
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    assert summary["counts"]["sessions_completed"] == 3
+    # The settings that produced the numbers are stored beside them.
+    assert summary["config"]["session"]["count"] == 3
+    assert summary["environment"]["playwright"]
+
+
+async def test_results_can_be_disabled(local_server: LocalServer) -> None:
+    config = make_config(
+        target={"url": local_server.base_url},
+        session={"count": 1, "duration_seconds": 0},
+        telemetry={"results_dir": ""},
+    )
+    from app.experiment import run_and_record
+
+    metrics, jsonl_path = await run_and_record(config)
+    assert jsonl_path is None
+    assert metrics.sessions_completed == 1

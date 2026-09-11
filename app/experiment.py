@@ -10,16 +10,18 @@ one edge of the system, and keep the middle unaware.
 """
 
 import logging
-from typing import cast
+from dataclasses import asdict
+from pathlib import Path
+from typing import Any, cast
 
 from app.browser.factory import BrowserFactory
 from app.browser.session import WaitUntil, run_session
 from app.config import Config
 from app.proxy.parser import ParseReport, Proxy, load_proxies
 from app.proxy.pool import ProxyPool
-from app.runner import ResultCallback, run_experiment
+from app.runner import ResultCallback, new_experiment_id, run_experiment
 from app.telemetry.metrics import ExperimentMetrics, SessionResult
-
+from app.telemetry.results import ResultWriter, write_summary
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +40,6 @@ def build_proxy_pool(config: Config) -> tuple[ProxyPool | None, ParseReport | No
     logger.info("proxy file %s: %s", config.proxy.file, report.summary())
     for error in report.errors:
         logger.warning("proxy file %s: %s", config.proxy.file, error)
-
 
     return ProxyPool(report.proxies), report
 
@@ -80,4 +81,44 @@ async def run_experiment_from_config(
         )
 
 
-__all__ = ["build_proxy_pool", "run_experiment_from_config"]
+__all__ = ["build_proxy_pool", "config_snapshot", "run_and_record", "run_experiment_from_config"]
+
+
+def config_snapshot(config: Config) -> dict[str, Any]:
+    """The config as plain data, to be stored beside the numbers it produced.
+
+    Converted here rather than in telemetry so that `telemetry` stays a leaf
+    package and never has to import Config.
+    """
+    return asdict(config)
+
+
+async def run_and_record(
+    config: Config, *, experiment_id: str | None = None
+) -> tuple[ExperimentMetrics, Path | None]:
+    """Run an experiment and write its results to disk.
+
+    Returns the metrics and the path of the JSONL file, or None if
+    `telemetry.results_dir` is empty (results disabled).
+
+    The JSONL file is opened for the whole run and each row is flushed as it
+    arrives, so the partial results of a run that crashes at session 48 are
+    still on disk and still valid JSONL.
+    """
+    run_id = experiment_id or new_experiment_id()
+
+    if not config.telemetry.writes_results:
+        logger.warning("telemetry.results_dir is empty; results will not be written to disk")
+        return await run_experiment_from_config(config, experiment_id=run_id), None
+
+    results_dir = config.telemetry.results_dir
+    jsonl_path = results_dir / f"{run_id}.jsonl"
+
+    with ResultWriter(jsonl_path) as writer:
+        metrics = await run_experiment_from_config(
+            config, experiment_id=run_id, on_result=writer.write
+        )
+
+    write_summary(results_dir / f"{run_id}.summary.json", metrics, config=config_snapshot(config))
+    logger.info("results written to %s", jsonl_path, extra={"path": str(jsonl_path)})
+    return metrics, jsonl_path

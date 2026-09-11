@@ -53,7 +53,7 @@ def make_pool(size: int) -> ProxyPool:
     return ProxyPool([Proxy(host=f"10.0.0.{n}", port=8080) for n in range(1, size + 1)])
 
 
-# The architecture 
+# The architecture
 
 
 def test_the_runner_does_not_pull_in_playwright() -> None:
@@ -63,14 +63,14 @@ def test_the_runner_does_not_pull_in_playwright() -> None:
     via other tests, so checking sys.modules here would always pass.
     """
     probe = "import app.runner, sys; assert 'playwright' not in sys.modules"
-  
-    completed = subprocess.run(  
+
+    completed = subprocess.run(
         [sys.executable, "-c", probe], capture_output=True, text=True, check=False
     )
     assert completed.returncode == 0, completed.stderr
 
 
-# Sequencing 
+# Sequencing
 
 
 async def test_runner_executes_the_requested_session_count() -> None:
@@ -99,7 +99,7 @@ async def test_results_are_returned_in_execution_order() -> None:
     assert [r.session_id for r in metrics.results] == [1, 2, 3, 4]
 
 
-# proxies 
+# proxies
 
 
 async def test_proxies_rotate_through_the_pool() -> None:
@@ -123,7 +123,7 @@ async def test_no_pool_means_no_proxy() -> None:
     assert all(label is None for _, _, label in fake.calls)
 
 
-# experiment id 
+# experiment id
 
 
 async def test_one_experiment_id_is_shared_by_every_session() -> None:
@@ -185,7 +185,7 @@ async def test_a_failing_result_callback_stops_the_run() -> None:
     assert all(isinstance(exc, OSError) for exc in exc_info.value.exceptions)
 
 
-# failures 
+# failures
 
 
 async def test_failures_are_recorded_and_do_not_stop_the_experiment() -> None:
@@ -371,7 +371,6 @@ async def test_one_raising_session_cancels_the_others() -> None:
 
     assert any(isinstance(exc, RuntimeError) for exc in exc_info.value.exceptions)
 
-   
     assert len(started) < 10
 
 
